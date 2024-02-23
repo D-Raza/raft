@@ -21,7 +21,7 @@ def start(config, server_num) do
 end # start
 
 # _________________________________________________________ next()
-def next(server) do
+def next(_server) do
 
   # invokes functions in AppendEntries, Vote, ServerLib etc
 
