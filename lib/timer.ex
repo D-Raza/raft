@@ -14,7 +14,7 @@ def restart_election_timer(server) do  # election will be restarted if no VOTE o
 
   server
   |> State.election_timer(election_timer)
-  |> Debug.message("+etim", {"started", timeout_msg, election_timeout})
+  |> Debug.message("+etim", {"started", timeout_msg, election_timeout}, 1002)
 end # restart_election_timer
 
 # _________________________________________________________ cancel_election_timer()

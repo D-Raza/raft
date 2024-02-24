@@ -8,10 +8,10 @@ CLIENTS   = 5      	# 1 or more
 TIMELIMIT = 15000	# milli-seconds(ms) to quit after
 PARAMS    = default	# e.g. default, slower, faster, etc
 
-DEBUG_OPTIONS = "none"
+# DEBUG_OPTIONS = "none"
 DEBUG_LEVEL   = 1000
 
-# DEBUG_OPTIONS = "+state +areq -areq +arep -arep +vreq +vall -vreq +vrep -vrep +atim -atim +etim -etim +dreq -dreq +drep -drep -creq -crep"
+DEBUG_OPTIONS = "+state !inf +areq -areq +arep -arep +vreq +vall -vreq +vrep -vrep +atim -atim +etim -etim +dreq -dreq +drep -drep -creq -crep"
 
 # AppendEntries(areq, arep, atim), Vote(vreq, vrep, vall), Election(etim), DB(dreq, drep), Client(creq, crep)
 # Plus (+) for send/send_after. Minus (-) for receiver
