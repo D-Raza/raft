@@ -30,11 +30,11 @@ def start(config, :cluster_start) do
 
   # bind servers and databases
   for num <- 0 .. config.n_servers-1 do
-    serverP   = Enum.at(servers, num) 
+    serverP   = Enum.at(servers, num)
     databaseP = Enum.at(databases, num)
     send serverP,   { :BIND, servers, databaseP }
     send databaseP, { :BIND, serverP }
-  end # for 
+  end # for
 
   # create 1 client in each client_node and bind to servers
   for num <- 1 .. config.n_clients do
