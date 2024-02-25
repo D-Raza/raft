@@ -58,9 +58,28 @@ def next(server) do
           end
 
         :FOLLOWER ->
-          server
-          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to follower's term, which is #{server.curr_term}")
-          |> Timer.restart_election_timer()
+          cond do
+            leader_term > server.curr_term ->
+              updated_server =
+                server
+                |> Debug.message("+state", "Follower #{server.server_num} missed out voting for new candidate", 998)
+                |> Vote.stepdown(%{term: leader_term})
+                |> State.leaderP(leader_pid)
+
+              send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP} }
+              updated_server
+            leader_term < server.curr_term ->
+              server
+              |> Debug.message("+state", "Follower #{server.server_num}'s term is greater than leader's term, which is #{leader_term}", 998)
+
+            true ->
+              updated_server =
+                server
+                |> Timer.restart_election_timer()
+
+              send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP} }
+              updated_server
+          end
 
         :LEADER ->
           server =
