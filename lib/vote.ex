@@ -18,6 +18,7 @@ defmodule Vote do
               server
               |> stepdown(%{term: term})
               |> Debug.message("+state", "Leader #{server.server_num} did not send heartbeat", 998)
+              |> State.voted_for(candidate_num)
 
             send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
             updated_server
@@ -51,13 +52,14 @@ defmodule Vote do
               #end
             updated_server =
               server
-              |> stepdown(%{term: term})
+              |> State.curr_term(term)
+              |> State.voted_for(candidate_num)
+              |> Timer.restart_election_timer()
 
             send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
             updated_server
           true ->
-            vote_granted = is_nil(server.voted_for)
-            send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: vote_granted}})
+            send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
             server
         end
       :CANDIDATE ->
@@ -70,6 +72,7 @@ defmodule Vote do
             updated_server =
               server
               |> stepdown(%{term: term})
+              |> State.voted_for(candidate_num)
 
             send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
             updated_server
