@@ -75,6 +75,7 @@ def next(server) do
             true ->
               updated_server =
                 server
+                |> Debug.message("+state", "#{server.server_num} is a follower of the Leader #{leader_term}", 998)
                 |> Timer.restart_election_timer()
 
               send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP} }
@@ -87,8 +88,6 @@ def next(server) do
             |> Debug.message("+state", "IMPOSSIBLE CASE")
           server
       end
-
-
     server
     |> Debug.info("Checking 1", 1002)
 
@@ -119,6 +118,7 @@ def next(server) do
 
   { :APPEND_ENTRIES_TIMEOUT, %{term: term, follower_pid: follower_pid }} ->
     server
+    |> Debug.message("+state", "Append entries timeout", 998)
     |> AppendEntries.handle_ape_timeout(%{term: term, follower_pid: follower_pid})
 
   { :VOTE_REQUEST, %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num}} ->
@@ -130,7 +130,7 @@ def next(server) do
   { :VOTE_REPLY, %{term: term, voter: voter, vote_granted: vote_granted}} when server.role == :CANDIDATE ->
       # IO.inspect(server, label: "Server state in VOTE_REPLY:")
       server
-      |> Debug.state("Server state in VOTE_REPLY: (DEBUG)", 1002)
+      |> Debug.message("+state", "#{server.server_num} receives vote reply of #{vote_granted} from #{voter}", 1002)
       |> Vote.handle_vote_reply(%{term: term, voter: voter, vote_granted: vote_granted})
 
   { :VOTE_REPLY, %{term: _term, voter: _voter, vote_granted: _vote_granted}} when server.role != :CANDIDATE ->
@@ -143,19 +143,19 @@ def next(server) do
       case server.role do
         :FOLLOWER ->
           server
-          |> Timer.restart_election_timer()
-          |> Debug.info("#{server.server_num} follower timeout", 998)
-          |> State.inc_term()
+          |> Debug.info("Follower server #{server.server_num} timedout", 998)
           |> State.role(:CANDIDATE)
-          |> State.new_voted_by()
+          |> State.inc_term()
           |> State.voted_for(server.server_num)
+          |> State.new_voted_by()
           |> State.add_to_voted_by(server.server_num)
-          |> Debug.info("#{server.server_num} follower becomes candidate", 998)
+          |> Timer.restart_election_timer()
+          |> Debug.info("Follower server #{server.server_num} becomes candidate", 998)
           |> send_vote_requests_to_all()
           |> next()
         :CANDIDATE ->
           server
-          |> Debug.state("Candidate #{server.server_num} timedout", 998)
+          |> Debug.state("Candidate server #{server.server_num} timedout", 998)
         # :LEADER ->
 
       end

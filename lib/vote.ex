@@ -16,8 +16,9 @@ defmodule Vote do
           term > server.curr_term ->
             updated_server =
               server
-              |> stepdown(%{term: term})
               |> Debug.message("+state", "Leader #{server.server_num} did not send heartbeat", 998)
+              |> Debug.message("+state", "Previous leader but now follower #{server.server_num} votes for #{candidate_num}", 998)
+              |> stepdown(%{term: term})
               |> State.voted_for(candidate_num)
 
             send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
@@ -52,15 +53,22 @@ defmodule Vote do
               #end
             updated_server =
               server
+              |> Debug.message("+state", "Follower #{server.server_num} votes for #{candidate_num}", 998)
               |> State.curr_term(term)
               |> State.voted_for(candidate_num)
-              |> Timer.restart_election_timer()
+              |> Debug.message("+state", "Check after #{server.server_num} voted and before vote_reply sent", 1002)
 
             send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
             updated_server
+            |> Timer.restart_election_timer()
+            |> Debug.message("+state", "Check after #{server.server_num} voted and after vote_reply sent", 1002)
           true ->
-            send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
-            server
+            updated_server =
+              server
+              |> Timer.restart_election_timer()
+
+            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: false}})
+            updated_server
         end
       :CANDIDATE ->
         cond do
@@ -71,6 +79,7 @@ defmodule Vote do
           term > server.curr_term ->
             updated_server =
               server
+              |> Debug.message("+state", "Candidate #{server.server_num} votes for #{candidate_num}", 998)
               |> stepdown(%{term: term})
               |> State.voted_for(candidate_num)
 
@@ -89,8 +98,8 @@ defmodule Vote do
         cond do
           term > server.curr_term ->
             server
+            |> Debug.message("+state", "Candidate #{server.server_num} received vote reply with higher term of #{term} from #{voter}", 998)
             |> stepdown(%{term: term})
-            |> Debug.assert(term == server.current_term, "Assert")
           term < server.curr_term ->
             server
             |> Debug.message("+state", "This case should never hit, voter is #{voter} whose term is #", 998)
@@ -98,8 +107,8 @@ defmodule Vote do
             updated_server =
               if vote_granted do
                 server
+                |> Debug.message("+state", "#{server.server_num} received vote from #{voter}", 998)
                 |> State.add_to_voted_by(voter)
-                |> Debug.message("+state", "Check", 1002)
               else
                 server
               end
@@ -107,11 +116,13 @@ defmodule Vote do
               if State.vote_tally(updated_server) >= server.majority do
                 updated_server
                 |> State.role(:LEADER)      # Server becomes leader
+                |> send_heartbeats_to_all()
                 |> Timer.cancel_election_timer()
                 |> State.leaderP(server.selfP)
-                |> Debug.message("+state", "Leader is now #{server.server_num}", 998)
+                |> Debug.message("+state", "LEADER IS NOW #{server.server_num}", 998)
+                |> Debug.state("New leader (#{server.server_num})'s state:", 1002)
                 |> State.init_next_index()
-                |> send_heartbeats_to_all()
+
                 # Set leaderP to server's canidate pid
                 # |> State.init_next_index()  # Initialise next_index, as new leader
                 # |> State.init_match_index() # Initialise match_index, as new leader
