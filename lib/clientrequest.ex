@@ -30,7 +30,11 @@ defmodule ClientRequest do
   defp determine_request_processing_state(leader, cid) do
     # Determine if CID is in the applied range
     # print out the request
+
+    IO.puts("entry bum : #{Log.entry_at(leader, leader.last_applied)}")
+
     IO.puts("request bum : #{Log.request_at(leader, leader.last_applied)}")
+
     applied_status = Enum.any?(1..leader.last_applied, fn i ->
       case Log.request_at(leader, i) do
         %{} = request when request.cid == cid -> true

@@ -27,7 +27,7 @@ def next(server) do
   server = receive do
 
   # Heartbeat request
-  { :APPEND_ENTRIES_REQUEST, %{leader_pid: leader_pid, leader_term: leader_term, commit_index: _commit_index} } ->
+  { :APPEND_ENTRIES_REQUEST, %{leader_pid: leader_pid, leader_num: leader_num, leader_term: leader_term, commit_index: _commit_index} } ->
     server =
       case server.role do
         :CANDIDATE ->
@@ -75,7 +75,7 @@ def next(server) do
             true ->
               updated_server =
                 server
-                |> Debug.message("+state", "#{server.server_num} is a follower of the Leader #{leader_term}", 998)
+                |> Debug.message("+state", "#{server.server_num} is a follower of the Leader #{leader_num}", 998)
                 |> Timer.restart_election_timer()
 
               send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP} }
@@ -93,7 +93,7 @@ def next(server) do
 
   # Heartbeat reply
   { :APPEND_ENTRIES_REPLY, %{follower_pid: _follower_pid} } ->
-    # send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_pid: server.selfP, leader_term: server.curr_term, commit_index: nil}}
+    # send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_pid: server.selfP, leader_num: server.server_num, leader_term: server.curr_term, commit_index: nil}}
     server
     |> Debug.info("Checking 2", 1002)
 
@@ -121,11 +121,11 @@ def next(server) do
     |> Debug.message("+state", "Append entries timeout", 998)
     |> AppendEntries.handle_ape_timeout(%{term: term, follower_pid: follower_pid})
 
-  { :VOTE_REQUEST, %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num}} ->
+  { :VOTE_REQUEST, %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num, candidate_last_log_term: candidate_last_log_term, candidate_last_log_index: candidate_last_log_index}} ->
       # IO.inspect(server, label: "Server state in VOTE_REQUEST:")
       server
-      |> Debug.state("Server state in VOTE_REQUEST: (DEBUG)", 1002)
-      |> Vote.handle_vote_request(%{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num})
+      |> Debug.info("Vote request received by #{server.server_num} with role #{server.role}: (DEBUG)", 1002)
+      |> Vote.handle_vote_request(%{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num, candidate_last_log_term: candidate_last_log_term, candidate_last_log_index: candidate_last_log_index})
 
   { :VOTE_REPLY, %{term: term, voter: voter, vote_granted: vote_granted}} when server.role == :CANDIDATE ->
       # IO.inspect(server, label: "Server state in VOTE_REPLY:")
@@ -135,6 +135,9 @@ def next(server) do
 
   { :VOTE_REPLY, %{term: _term, voter: _voter, vote_granted: _vote_granted}} when server.role != :CANDIDATE ->
       server
+
+  { :ELECTION_TIMEOUT, %{term: term, election: _election}} when term < server.curr_term -> # if election timeout message from old term, ignore it.
+    server |> Debug.message("+state", "Ellection Timeout message arrives from old term", 1002)
 
   { :ELECTION_TIMEOUT, %{term: _term, election: _election} } ->
     # Don't vote for yourself yet, broadcast to everyone including self
@@ -156,7 +159,9 @@ def next(server) do
         :CANDIDATE ->
           server
           |> Debug.state("Candidate server #{server.server_num} timedout", 998)
-        # :LEADER ->
+        :LEADER ->
+          server
+          |> Debug.message("+state", "THIS SHOULD NOT HAPPEN: Leader received election timeout message", 998)
 
       end
 
@@ -179,7 +184,7 @@ def send_vote_requests_to_all(server) do
 
   Enum.each(server.servers, fn s ->
     unless s == server.selfP do
-      send s, {:VOTE_REQUEST, %{term: server.curr_term, candidate_pid: server.selfP, candidate_num: server.server_num}}
+      send s, {:VOTE_REQUEST, %{term: server.curr_term, candidate_pid: server.selfP, candidate_num: server.server_num, candidate_last_log_term: Log.last_term(server), candidate_last_log_index: Log.last_index(server)}}
     end
   end)
 
