@@ -14,11 +14,17 @@ defmodule Vote do
             server
             |> Debug.message("+state", "This case should not be hit", 998)
           term > server.curr_term ->
-            server
-            |> Debug.message("+state", "This case should not be hit", 998)
+            updated_server =
+              server
+              |> stepdown(%{term: term})
+              |> Debug.message("+state", "Leader #{server.server_num} did not send heartbeat", 998)
+
+            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
+            updated_server
+
           true ->
             server
-            |> Debug.message("+state", "This case can be hit", 998)
+            |> Debug.message("+state", "Leader #{server.server_num} received votereq from #{candidate_num}", 998)
         end
       :FOLLOWER ->
         cond do
@@ -33,20 +39,25 @@ defmodule Vote do
             # else
             #   false
             # end
-            vote_granted = server.voted_for in [nil, candidate_num]
+            # vote_granted = server.voted_for in [nil, candidate_num]
+            # updated_server =
+             # if vote_granted do
+              #  server
+               # |> State.voted_for(candidate_num)
+               # |> State.curr_term(term)
+               # |> Timer.restart_election_timer()
+              #else
+               # server
+              #end
             updated_server =
-              if vote_granted do
-                server
-                |> State.voted_for(candidate_num)
-                |> State.curr_term(term)
-                |> Timer.restart_election_timer()
-              else
-                server
-              end
-            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: vote_granted}})
+              server
+              |> stepdown(%{term: term})
+
+            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
             updated_server
           true ->
-            send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
+            vote_granted = is_nil(server.voted_for)
+            send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: vote_granted}})
             server
         end
       :CANDIDATE ->
@@ -56,8 +67,12 @@ defmodule Vote do
             server
           # TODO: logging
           term > server.curr_term ->
-            server
-            |> stepdown(%{term: term})
+            updated_server =
+              server
+              |> stepdown(%{term: term})
+
+            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
+            updated_server
           true ->
             send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
             server
@@ -75,7 +90,7 @@ defmodule Vote do
             |> Debug.assert(term == server.current_term, "Assert")
           term < server.curr_term ->
             server
-            |> Debug.message("+state", "This case should never hit", 998)
+            |> Debug.message("+state", "This case should never hit, voter is #{voter} whose term is #", 998)
           true ->
             updated_server =
               if vote_granted do
@@ -89,9 +104,9 @@ defmodule Vote do
               if State.vote_tally(updated_server) >= server.majority do
                 updated_server
                 |> State.role(:LEADER)      # Server becomes leader
+                |> Timer.cancel_election_timer()
                 |> State.leaderP(server.selfP)
                 |> Debug.message("+state", "Leader is now #{server.server_num}", 998)
-                |> Timer.cancel_election_timer()
                 |> State.init_next_index()
                 |> send_heartbeats_to_all()
                 # Set leaderP to server's canidate pid

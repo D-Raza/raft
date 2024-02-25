@@ -85,6 +85,7 @@ def handle_ape_reply(server, %{ follower_pid: follower_pid, follower_term: follo
  end # handle_ape_reply
 
 def handle_ape_timeout(server, %{term: term, follower_pid: follower_pid}) do
+  IO.puts("AppendEntries timeout")
   server = case server.role do
     :LEADER when server.curr_term == term ->
       server |> send_entries(follower_pid)
@@ -93,7 +94,7 @@ def handle_ape_timeout(server, %{term: term, follower_pid: follower_pid}) do
   server
 end # handle_ape_timeout
 
-defp send_entries(server, follower_pid) do
+def send_entries(server, follower_pid) do
   # Determines whether to send new entries or a heartbeat based on follower's next index
   next_index = server.next_index[follower_pid]
   log_last_index = Log.last_index(server)

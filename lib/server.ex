@@ -33,13 +33,13 @@ def next(server) do
         :CANDIDATE ->
           server
           |> State.role(:FOLLOWER)
-          |> Debug.assert(leader_term == server.curr_term, "Leader term is not equal to current term, which is #{server.curr_term}")
+          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to current term, which is #{server.curr_term}")
           |> Debug.message("+state", "#{server.server_num} turned from candidate to follower", 998)
           |> Timer.restart_election_timer()
 
         :FOLLOWER ->
           server
-          |> Debug.assert(leader_term == server.curr_term, "Leader term is not equal to current term, which is #{server.curr_term}")
+          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to current term, which is #{server.curr_term}")
           |> Timer.restart_election_timer()
 
         :LEADER ->
@@ -52,7 +52,7 @@ def next(server) do
     |> Debug.info("Checking 1", 1002)
 
   # Heartbeat reply
-  { :APPEND_ENTRIES_REPLY, %{follower_pid: follower_pid} } ->
+  { :APPEND_ENTRIES_REPLY, %{follower_pid: _follower_pid} } ->
     # send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_pid: server.selfP, leader_term: server.curr_term, commit_index: nil}}
     server
     |> Debug.info("Checking 2", 1002)
@@ -60,7 +60,7 @@ def next(server) do
   { :APPEND_ENTRIES_REQUEST, %{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries, leader_pid: leader_pid}} ->
     server
     |> Timer.restart_election_timer()
-    |> AppendEntries.handle_ape_request(%{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries})
+    |> AppendEntries.handle_ape_request(%{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries, leader_pid: leader_pid})
 
   # Server is not a leader
   { :APPEND_ENTRIES_REPLY, %{ follower_pid: _follower_pid, follower_term: _follower_term, can_append_entries: _can_append_entries, follower_last_index: _follower_last_index }} when server.role != :LEADER ->
@@ -103,33 +103,32 @@ def next(server) do
         :FOLLOWER ->
           server
           |> Timer.restart_election_timer()
-          |> Debug.info("Follower timeout", 998)
+          |> Debug.info("#{server.server_num} follower timeout", 998)
           |> State.inc_term()
           |> State.role(:CANDIDATE)
           |> State.new_voted_by()
           |> State.voted_for(server.server_num)
           |> State.add_to_voted_by(server.server_num)
-          |> Debug.info("Follower becomes candidate", 998)
+          |> Debug.info("#{server.server_num} follower becomes candidate", 998)
           |> send_vote_requests_to_all()
           |> next()
         :CANDIDATE ->
-          IO.inspect('CANDIDATE TIMES OUT')
+          server
+          |> Debug.state("Candidate #{server.server_num} timedout", 998)
         # :LEADER ->
 
       end
 
-  { :CLIENT_REQUEST, %{cmd: _cmd, clientP: _clientP, cid: _cid}} ->
-    # for now
-    server |> next()
+  { :CLIENT_REQUEST, %{cmd: cmd, clientP: clientP, cid: cid}} ->
+    server
+    |> ClientRequest.handle_client_request(%{cmd: cmd, clientP: clientP, cid: cid})
 
   unexpected ->
     Helper.node_halt("***** Server: unexpected message #{inspect unexpected}")
 
   end # receive
 
-# |> State.cancel_election_timer()
-  server
-  |> next()
+  server |> next()
 end # next
 
 
