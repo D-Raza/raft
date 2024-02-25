@@ -31,23 +31,45 @@ def next(server) do
     server =
       case server.role do
         :CANDIDATE ->
-          server
-          |> State.role(:FOLLOWER)
-          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to current term, which is #{server.curr_term}")
-          |> Debug.message("+state", "#{server.server_num} turned from candidate to follower", 998)
-          |> Timer.restart_election_timer()
+          cond do
+            leader_term > server.curr_term ->
+              updated_server =
+                server
+                |> Vote.stepdown(%{term: leader_term})
+                |> State.leaderP(leader_pid)
+                |> Debug.message("+state", "#{server.server_num} turned from candidate to follower after missing out the voting", 998)
+
+              send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP}}
+              updated_server
+
+            leader_term < server.curr_term ->
+              server
+              |> Debug.message("+state", "Leader term #{leader_term} is behind the candidate's term, which is #{server.curr_term}", 998)
+
+            true ->
+              updated_server =
+                server
+                |> Vote.stepdown(%{term: leader_term})
+                |> State.leaderP(leader_pid)
+                |> Debug.message("+state", "#{server.server_num} turned from candidate to follower", 998)
+
+              send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: updated_server.selfP} }
+              updated_server
+          end
 
         :FOLLOWER ->
           server
-          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to current term, which is #{server.curr_term}")
+          |> Debug.assert(leader_term == server.curr_term, "Leader term #{leader_term} is not equal to follower's term, which is #{server.curr_term}")
           |> Timer.restart_election_timer()
 
         :LEADER ->
+          server =
+            server
+            |> Debug.message("+state", "IMPOSSIBLE CASE")
           server
-          |> Debug.message("+state", "IMPOSSIBLE CASE")
       end
 
-    send leader_pid, { :APPEND_ENTRIES_REPLY, %{follower_pid: server.selfP} }
+
     server
     |> Debug.info("Checking 1", 1002)
 
