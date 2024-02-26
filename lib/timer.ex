@@ -36,7 +36,7 @@ def restart_append_entries_timer(server, followerP) do
 
   server
   |> State.append_entries_timer(followerP, append_entries_timer)
-  |> Debug.message("+atim", {"started", timeout_msg, server.config.append_entries_timeout})
+  |> Debug.message("+atim", {"started", timeout_msg, server.config.append_entries_timeout}, 1002)
 end # restart_append_entries_timer
 
 # _________________________________________________________ cancel_append_entries_timer()

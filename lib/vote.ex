@@ -14,17 +14,31 @@ defmodule Vote do
             server
             |> Debug.message("+state", "This case should not be hit", 998)
           term > server.curr_term ->
-            updated_server =
+            server =
               server
               |> Debug.message("+state", "Leader #{server.server_num} did not send heartbeat", 998)
               |> Debug.message("+state", "Previous leader but now follower #{server.server_num} votes for #{candidate_num}", 998)
               |> stepdown(%{term: term})
-              |> State.voted_for(candidate_num)
+              # |> State.voted_for(candidate_num)
 
-            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
-            updated_server
 
-          true ->
+
+            if server.voted_for in [nil, candidate_num] and (candidate_last_log_term > Log.last_term(server) or (candidate_last_log_term == Log.last_term(server) and candidate_last_log_index >= Log.last_index(server))) do
+              server =
+                server
+                |> State.voted_for(candidate_num)
+                |> Debug.message("+state", "Check after #{server.server_num} voted and before vote_reply sent", 1002)
+
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: true}}
+              server |> Debug.message("+state", "Check after #{server.server_num} voted and after vote_reply sent", 1002)
+            else
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}}
+            end
+
+          # send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: true}})
+          server
+
+          true -> # term == server.curr_term
             server
             |> Debug.message("+state", "Leader #{server.server_num} received votereq from #{candidate_num}", 998)
         end
@@ -34,36 +48,29 @@ defmodule Vote do
             send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
             server
           term > server.curr_term ->
-            # TODO: logging
-            # if server.voted_for in [nil, candidate_num] do
-            #   IO.inspect("server_num: #{server.server_num} server.voted_for #{server.voted_for} candidate_num: #{candidate_num}")
-            #   true
-            # else
-            #   false
-            # end
-            # vote_granted = server.voted_for in [nil, candidate_num]
-            # updated_server =
-             # if vote_granted do
-              #  server
-               # |> State.voted_for(candidate_num)
-               # |> State.curr_term(term)
-               # |> Timer.restart_election_timer()
-              #else
-               # server
-              #end
-            updated_server =
+            server =
               server
-              |> Debug.message("+state", "Follower #{server.server_num} votes for #{candidate_num}", 998)
+              #|> Debug.assert(is_nil(server.voted_for), "Voted_for must be nil? but is #{server.voted_for}")
               |> State.curr_term(term)
-              |> State.voted_for(candidate_num)
-              |> Timer.restart_election_timer() # cancel for debug, should be restart.
-              |> Debug.message("+state", "Check after #{server.server_num} voted and before vote_reply sent", 1002)
+              |> Timer.restart_election_timer()
 
-            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
-            updated_server
-            |> Debug.message("+state", "Check after #{updated_server.server_num} voted and after vote_reply sent", 1002)
+            Debug.assert(server, server.curr_term == term, "updated server's term should be equal to term")
 
-          true ->
+            if server.voted_for in [nil, candidate_num] and (candidate_last_log_term > Log.last_term(server) or (candidate_last_log_term == Log.last_term(server) and candidate_last_log_index >= Log.last_index(server))) do
+              server =
+                server
+                |> Debug.message("+state", "Follower #{server.server_num} votes for #{candidate_num}", 998)
+                |> State.voted_for(candidate_num)
+                 # cancel for debug, should be restart.
+
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: true}}
+            else
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}}
+            end
+
+            server
+
+          true -> # term == server.curr_term
             updated_server =
               server
               |> Timer.restart_election_timer()
@@ -76,16 +83,23 @@ defmodule Vote do
           term < server.curr_term ->
             send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
             server
-          # TODO: logging
           term > server.curr_term ->
-            updated_server =
+            server =
               server
               |> Debug.message("+state", "Candidate #{server.server_num} votes for #{candidate_num}", 998)
               |> stepdown(%{term: term})
-              |> State.voted_for(candidate_num)
 
-            send(candidate_pid, {:VOTE_REPLY, %{term: updated_server.curr_term, voter: updated_server.server_num, vote_granted: true}})
-            updated_server
+            if server.voted_for in [nil, candidate_num] and (candidate_last_log_term > Log.last_term(server) or (candidate_last_log_term == Log.last_term(server) and candidate_last_log_index >= Log.last_index(server))) do
+              server =
+                server
+                |> State.voted_for(candidate_num)
+
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: true}}
+              server
+            else
+              send candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}}
+            end
+          server
           true ->
             send(candidate_pid, {:VOTE_REPLY, %{term: server.curr_term, voter: server.server_num, vote_granted: false}})
             server
@@ -93,6 +107,7 @@ defmodule Vote do
     end
     #|> Debug.message("+state", "THIS SHOULD NOT HAVE A TERM OF 0")
   end # handle_vote_request
+
 
   def handle_vote_reply(server, %{term: term, voter: voter, vote_granted: vote_granted}) do
         # ONLY CANDIDATES CAN PROCESS VOTE REPLIES IN OUR IMPLEMENTATION
@@ -126,8 +141,6 @@ defmodule Vote do
   # server
   end # handle_vote_reply
 
-
-
 def stepdown(server, %{term: term}) do
   server
   |> State.curr_term(term)
@@ -153,7 +166,8 @@ end # establish_leadership
 defp send_heartbeats_to_all(server) do
   Enum.each(server.servers, fn s ->
     unless s == server.selfP do
-      send s, {:APPEND_ENTRIES_REQUEST, %{leader_pid: server.selfP, leader_num: server.server_num, leader_term: server.curr_term, commit_index: nil}}
+      send s, {:APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: 0, prev_term: 0, prev_index: 0, leader_entries: %{}, leader_pid: server.selfP}}
+      # send s, {:APPEND_ENTRIES_REQUEST, %{leader_pid: server.selfP, leader_num: server.server_num, leader_term: server.curr_term, commit_index: nil}}
     end
   end)
 
