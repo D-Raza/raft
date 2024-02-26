@@ -55,17 +55,17 @@ def next(client) do
     cmd  = { :MOVE, amount, account1, account2 }
     cid  = { client.client_num, client.seqnum}                     # unique client id for cmd
 
-    client 
+    client
     |> Client.request({ :CLIENT_REQUEST, %{clientP: client.clientP, cid: cid, cmd: cmd } })
-    |> Client.send_client_request_receive_reply(cid)  
-    |> Client.next() 
+    |> Client.send_client_request_receive_reply(cid)
+    |> Client.next()
 
   end # receive
 end # next
 
 # _________________________________________________________ send_client_request_receive_reply()
 def send_client_request_receive_reply(client, cid) do
-  client 
+  client
   |> Client.send_client_request_to_leader()
   |> Client.receive_reply_from_leader(cid)
 end # send_client_request_receive_reply
@@ -74,8 +74,8 @@ end # send_client_request_receive_reply
 def send_client_request_to_leader(client) do
   client = if client.leaderP do client else      # round-robin leader selection
     [server | rest] = client.servers
-    client 
-    |> Client.leaderP(server) 
+    client
+    |> Client.leaderP(server)
     |> Client.servers(rest ++ [server])
   end # if
   send client.leaderP, client.request
@@ -86,18 +86,18 @@ end # send_client_request_to_leader
 def receive_reply_from_leader(client, cid) do
   receive do
   { :CLIENT_REPLY, m } ->
-    cond do 
+    cond do
       m.cid < cid ->
-        client 
+        client
         |> Client.receive_reply_from_leader(cid)
       m.reply == :NOT_LEADER ->  # retry
-        client 
-        |> Client.leaderP(m.leaderP)     
+        client
+        |> Client.leaderP(m.leaderP)
         |> Client.send_client_request_receive_reply(cid)
       true ->                    # set leader and return
         client
         |> Client.result(m.reply)
-        |> Client.leaderP(m.leaderP)     
+        |> Client.leaderP(m.leaderP)
     end # cond
 
   { :CLIENT_TIMELIMIT } ->
@@ -114,4 +114,3 @@ def receive_reply_from_leader(client, cid) do
 end # receive_reply
 
 end # Client
-

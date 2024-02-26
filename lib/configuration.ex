@@ -61,21 +61,85 @@ def params :default do
       # 4 => 8_000,
     },
 
-    crash_leaders_after:      3000,    # nil or time after which leaders will crash
-
+    crash_leaders_after:    3000,    # nil or time after which leaders will crash
   }
 end # params :default
-
 
 # add further params functions for your own tests and experiments
 
 # _________________________________________________________ params :testing_XX
-def params :testing_XX do             
+def params :crashy1 do
   Map.merge (params :default),
   %{
+    crash_servers: %{		       # server_num => crash_after_time (ms), ..
+      3 => 3_000,
+      4 => 9_000,
+    }
     # omitted
   }
-end # params :testing_XX
+end # params :crashy1
+
+def params :crashy2 do
+  Map.merge (params :default),
+  %{
+    crash_servers: %{		       # server_num => crash_after_time (ms), ..
+      1 => 5_000,
+      2 => 7_000,
+      3 => 9_000,
+      4 => 11_000,
+    }
+  }
+end # params :crashy2
+
+def params :crashy3 do
+  Map.merge (params :default),
+  %{
+    crash_leaders_after:  5000,
+  }
+end # params :crashy3
+
+def params :slow_client do
+  Map.merge (params :default),
+  %{
+    client_request_interval: 100
+    # omitted
+  }
+end # params :slow_client
+
+def params :slower_election_timeout do
+  Map.merge (params :default),
+  %{
+    election_timeout_range:  1000..2000
+    # omitted
+  }
+end # params :slower_election_timeout
+
+def params :faster_election_timeout do
+  Map.merge (params :default),
+  %{
+    election_timeout_range:  50..150
+    # omitted
+  }
+end # params :faster_election_timeout
+
+def params :more_accounts_with_more_transactions do
+  Map.merge (params :default),
+  %{
+    n_accounts:              1000,
+    max_amount:              4_000
+    # omitted
+  }
+end # params :more_accounts
+
+def params :less_accounts_with_smaller_transactions do
+  Map.merge (params :default),
+  %{
+    n_accounts:              20,
+    max_amount:              100
+    # omitted
+  }
+end # params :less_accounts
+
 
 # etc ..
 

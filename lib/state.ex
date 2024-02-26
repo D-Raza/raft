@@ -70,8 +70,8 @@ def role(s, v)            do Map.put(s, :role, v) end
 def commit_index(s, v)    do Map.put(s, :commit_index, v) end
 def last_applied(s, v)    do Map.put(s, :last_applied, v) end
 
-def next_index(s, v)      do Map.put(s, :next_index, v) end
-def next_index(s, k, v)   do Map.put(s, :next_index, Map.put(s.next_index, k, v)) end
+def next_index(s, v)      do Map.put(s, :next_index, v) end                                   # sets the entire next_inxex map to be v
+def next_index(s, k, v)   do Map.put(s, :next_index, Map.put(s.next_index, k, v)) end         # sets next_index[k] to v
 def match_index(s, v)     do Map.put(s, :match_index, v) end
 def match_index(s, k, v)  do Map.put(s, :match_index, Map.put(s.match_index, k, v)) end
 

@@ -37,7 +37,7 @@ def next(monitor) do
       Monitor.halt "  ** error db #{db}: seq #{seqnum} expecting #{done+1}"
     end # if
 
-    monitor = 
+    monitor =
       case Map.get(monitor.moves, seqnum) do
       nil ->
         # IO.puts "db #{db} seq #{seqnum} = #{done+1}"
@@ -57,7 +57,7 @@ def next(monitor) do
 
   { :CLIENT_REQUEST, server_num } ->    # client requests seen by leaders
     value = Map.get(monitor.requests, server_num, 0)
-    monitor 
+    monitor
     |> Monitor.requests(server_num, value + 1)
     |> Monitor.next()
 

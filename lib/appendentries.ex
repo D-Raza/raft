@@ -8,14 +8,26 @@ def handle_ape_request(server, %{leader_term: leader_term, commit_index: commit_
   Debug.message(server, "+state", "#{server.server_num} received ape request", 1002)
   server = Timer.restart_election_timer(server)
 
-  if leader_term > server.curr_term do # If server's term is less than leader's term, step down
+  server = if leader_term > server.curr_term do # If server's term is less than leader's term, step down
     server
     |> Vote.stepdown(%{term: leader_term}) # terms are equal
     |> State.leaderP(leader_pid)
+  else
+    server
+  end
+
+
+  # TODO: BUM? Maybe not?
+  server = if leader_term == server.curr_term do
+    server
+    |> State.leaderP(leader_pid)
+  else
+    server
   end
 
   if leader_term < server.curr_term do
-    send leader_pid, {:APPEND_ENTRIES_REPLY, %{ follower_pid: server.selfP, follower_term: server.curr_term, can_append_entries: false, follower_last_index: nil }}
+    send leader_pid, {:APPEND_ENTRIES_REPLY, %{ follower_pid: server.selfP, follower_term: server.curr_term, can_append_entries: false, follower_last_index: -1 }} # TODO: BUM?, nil -> -1
+    server
   else # leader_term == server.curr_term
     can_append_entries = prev_index == 0 || (prev_index <= Log.last_index(server) && Log.term_at(server, prev_index) == prev_term)
     {server, index} = if can_append_entries do
@@ -59,6 +71,7 @@ def handle_ape_reply(server, %{ follower_pid: follower_pid, follower_term: follo
  end # handle_ape_reply
 
 defp check_for_majority_commits(server) do
+  Debug.assert(server, server.role == :LEADER, "MAJORITY HAS TO BE CHECKED BY LEADER")
   current_commit_index = server.commit_index
   uncommitted_entries = Log.get_entries(server, current_commit_index + 1..Log.last_index(server))
   server = Debug.info(server, "Uncommitted log entries: #{inspect(uncommitted_entries)}", 1002)
@@ -78,7 +91,7 @@ defp check_for_majority_commits(server) do
 
   newly_commited_entries = Log.get_entries(server, current_commit_index + 1..new_commit_index)
   for {_, entry} <- newly_commited_entries do
-    send entry.request.clientP, { :CLIENT_REPLY, %{ cid: entry.request.cid, leaderP: server.selfP, reply: :OK}} # TODO: "reply: :OK" BUM? MAYBE NOT?
+    send entry.request.clientP, { :CLIENT_REPLY, %{ cid: entry.request.cid, leaderP: server.selfP, reply: :OK}}
   end
   server
 end
@@ -97,19 +110,38 @@ end
 defp apply_commits_and_request_db(server) do
   cond do
     server.last_applied == server.commit_index ->
+      Debug.message(server, "+state", "#{server.role} AAAAA", 1002)
       server
       |> Debug.info("No new commits to apply", 1002)
     true -> # server.last_applied != server.commit_index
       # Apply commits
+      Debug.message(server, "+state", "#{server.role} BBBBB", 988)
       entries_to_apply = Log.get_entries(server, server.last_applied+1..server.commit_index)
       Enum.each(entries_to_apply, fn {_, entry} ->
         send server.databaseP, { :DB_REQUEST, entry.request }
       end)
       # Update last_applied
-      server
-      |> State.last_applied(server.commit_index)
+      State.last_applied(server, server.commit_index)
   end
 end
+
+def handle_ape_timeout_BUM(server, %{term: term, followerP: follower_pid}) do
+  server = case server.role do
+    :LEADER when server.curr_term == term ->
+      server |> send_entries(follower_pid)
+    :CANDIDATE ->
+      IO.puts("AppendEntries timeout, server is a #{server.role}")
+      # server
+      # TODO: BUM?FUCKING BUM
+      server = Timer.restart_append_entries_timer(server, follower_pid)
+      # %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num, candidate_last_log_term: candidate_last_log_term, candidate_last_log_index: candidate_last_log_index}
+      send follower_pid, { :VOTE_REQUEST, %{term: server.curr_term, candidate_pid: server.selfP, candidate_last_log_term: Log.last_term(server), candidate_last_log_index: Log.last_index(server)}}
+      server
+    :FOLLOWER ->
+      server
+  end
+  server
+end # handle_ape_timeout
 
 def handle_ape_timeout(server, %{term: term, follower_pid: follower_pid}) do
   # IO.puts("AppendEntries timeout")
@@ -122,38 +154,47 @@ def handle_ape_timeout(server, %{term: term, follower_pid: follower_pid}) do
 end # handle_ape_timeout
 
 def send_entries_to_all_but_self(server) do
-  Enum.reduce(server.servers, server, fn follower_pid, acc_server ->
-    if follower_pid != server.selfP do
-      send_entries(acc_server, follower_pid)
-    else
-      acc_server
-    end
-  end)
+  # Enum.reduce(server.servers, server, fn follower_pid, acc_server ->
+  #   if follower_pid != server.selfP do
+  #     send_entries(acc_server, follower_pid)
+  #   else
+  #     acc_server
+  #   end
+  # end)
+  followers = Enum.filter(server.servers, fn follower_pid -> follower_pid != server.selfP end)
+  Enum.reduce(followers, server, fn follower_pid, acc_server -> send_entries(acc_server, follower_pid) end)
 end # send_entries_to_all_but_self
 
 defp send_entries(server, follower_pid) do
   # Determines whether to send new entries or a heartbeat based on follower's next index
-  next_index = server.next_index[follower_pid]
-  log_last_index = Log.last_index(server)
-  server =
-    case next_index < log_last_index + 1 do
-      # true  ->
-      true ->
-        # Calculate starting point for new entries and the term at the previous index
-        follower_prev_index = next_index - 1
-        entries = Log.get_entries(server, follower_prev_index + 1..log_last_index)
-        prev_term = Log.term_at(server, follower_prev_index)
+  # next_index = server.next_index[follower_pid]
+  # log_last_index = Log.last_index(server)
+  # server =
+  #   case next_index < log_last_index + 1 do
+  #     # true  ->
+  #     true ->
+  #       # Calculate starting point for new entries and the term at the previous index
+  #       follower_prev_index = next_index - 1
+  #       entries = Log.get_entries(server, follower_prev_index + 1..log_last_index)
+  #       prev_term = Log.term_at(server, follower_prev_index)
 
-        # Send new entries to follower
-        server = Timer.restart_append_entries_timer(server, follower_pid)
-        send follower_pid, { :APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: server.commit_index, prev_index: follower_prev_index, prev_term: prev_term, leader_entries: entries, leader_pid: server.selfP}}
-        server
-      false ->
-        # Follower is up to date, send a heartbeat
-        server = Timer.restart_append_entries_timer(server, follower_pid)
-        send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: 0, prev_term: 0, prev_index: 0, leader_entries: %{}, leader_pid: server.selfP}}
-        server
-    end
+  #       # Send new entries to follower
+  #       server = Timer.restart_append_entries_timer(server, follower_pid)
+  #       send follower_pid, { :APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: server.commit_index, prev_index: follower_prev_index, prev_term: prev_term, leader_entries: entries, leader_pid: server.selfP}}
+  #       server
+  #     false ->
+  #       # Follower is up to date, send a heartbeat
+  #       server = Timer.restart_append_entries_timer(server, follower_pid) #SHOULD THESE BE ALWAYS 0? CHECK,INSTEAD SET commıt_ındex = commit_index ?
+  #       send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: 0, prev_term: 0, prev_index: 0, leader_entries: %{}, leader_pid: server.selfP}}
+  #       server
+  #   end
+  # server
+  server = Timer.restart_append_entries_timer(server, follower_pid)
+  prev_index = server.next_index[follower_pid] - 1
+  prev_term  = Log.term_at(server, prev_index)
+  last_entry = min(Log.last_index(server), prev_index)
+  entries = Log.get_entries(server, last_entry+1..Log.last_index(server))
+  send follower_pid, { :APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: server.commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: entries, leader_pid: server.selfP}}
   server
 end # send_entries
 

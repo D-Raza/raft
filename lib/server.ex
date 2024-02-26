@@ -15,6 +15,8 @@ def start(config, server_num) do
   { :BIND, servers, databaseP } ->
     config
     |> State.initialise(server_num, servers, databaseP)
+    |> State.init_next_index()  # TODO: BUM?
+    |> State.init_match_index() # TODO: BUM?
     |> Timer.restart_election_timer()
     |> Server.next()
   end # receive
@@ -27,14 +29,17 @@ def next(server) do
   server = receive do
 
   { :APPEND_ENTRIES_REQUEST, %{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries, leader_pid: leader_pid}} ->
-    Debug.message(server, "+state", "Heartbeat received with commit_index #{commit_index}", 1002)
-
     server
-    |> Timer.restart_election_timer()
+    |> Debug.message("+state", "Heartbeat received with commit_index #{commit_index}", 1002)
     |> AppendEntries.handle_ape_request(%{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries, leader_pid: leader_pid})
 
   # Server is not a leader
-  { :APPEND_ENTRIES_REPLY, %{ follower_pid: _follower_pid, follower_term: _follower_term, can_append_entries: _can_append_entries, follower_last_index: _follower_last_index }} when server.role != :LEADER ->
+  { :APPEND_ENTRIES_REPLY, %{ follower_pid: _follower_pid, follower_term: follower_term, can_append_entries: _can_append_entries, follower_last_index: _follower_last_index }} when server.role != :LEADER ->
+    server = if follower_term > server.curr_term do
+      server |> Vote.stepdown(%{ term: follower_term })
+    else
+      server
+    end
     server
 
   # Server is a leader
@@ -49,6 +54,7 @@ def next(server) do
 
   { :APPEND_ENTRIES_TIMEOUT, %{term: term, followerP: follower_pid }} ->
     server
+    |> Debug.message("+state", "", 1002)
     |> AppendEntries.handle_ape_timeout(%{term: term, follower_pid: follower_pid})
 
   { :VOTE_REQUEST, %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num, candidate_last_log_term: candidate_last_log_term, candidate_last_log_index: candidate_last_log_index}} ->
@@ -70,6 +76,10 @@ def next(server) do
       server
     end
 
+  # { :ELECTION_TIMEOUT, %{term: _term, election: _election}} ->
+  #   server
+  #   |> Vote.handle_election_timeout()
+
   { :ELECTION_TIMEOUT, %{term: term, election: _election}} when term < server.curr_term -> # if election timeout message from old term, ignore it.
     server |> Debug.message("+state", "Ellection Timeout message arrives from old term", 1002)
 
@@ -77,26 +87,26 @@ def next(server) do
     # Don't vote for yourself yet, broadcast to everyone including self
     # Accept it, then vote for yourself
 
-      cond do
-        server.role in [:FOLLOWER, :CANDIDATE] ->
-          server
-          |> Debug.info("#{server.role} server #{server.server_num} timedout", 998)
-          |> State.role(:CANDIDATE)
-          |> State.inc_term()
-          |> State.voted_for(server.server_num)
-          |> State.new_voted_by()
-          |> State.add_to_voted_by(server.server_num)
-          |> Timer.restart_election_timer()
-          |> Debug.info("Follower server #{server.server_num} becomes candidate", 998)
-          |> send_vote_requests_to_all()
-          |> next()
-        # :CANDIDATE ->
-        #   server
-        #   |> Debug.state("Candidate server #{server.server_num} timedout", 998)
-        :LEADER ->
-          server
-          |> Debug.message("+state", "THIS SHOULD NOT HAPPEN: Leader received election timeout message", 998)
-      end
+    cond do
+      server.role in [:FOLLOWER, :CANDIDATE] ->
+        server
+        |> Debug.info("#{server.role} server #{server.server_num} timedout", 998)
+        |> State.role(:CANDIDATE)
+        |> State.inc_term()
+        |> State.voted_for(server.server_num)
+        |> State.new_voted_by()
+        |> State.add_to_voted_by(server.server_num)
+        |> Timer.restart_election_timer()
+        |> Debug.info("Follower server #{server.server_num} becomes candidate", 998)
+        |> send_vote_requests_to_all()
+        |> next()
+      # :CANDIDATE ->
+      #   server
+      #   |> Debug.state("Candidate server #{server.server_num} timedout", 998)
+      :LEADER ->
+        server
+        |> Debug.message("+state", "THIS SHOULD NOT HAPPEN: Leader received election timeout message", 998)
+    end
 
   { :CLIENT_REQUEST, payload = %{cmd: _cmd, clientP: _clientP, cid: _cid}} ->
     server
