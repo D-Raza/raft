@@ -75,6 +75,13 @@ def next_index(s, k, v)   do Map.put(s, :next_index, Map.put(s.next_index, k, v)
 def match_index(s, v)     do Map.put(s, :match_index, v) end
 def match_index(s, k, v)  do Map.put(s, :match_index, Map.put(s.match_index, k, v)) end
 
+def get_info(s), do: [s.curr_term, s.server_num, s.selfP, Log.term_at(s, Log.last_index(s)), Log.last_index(s)]
+def get_append_entries_timer(s, v), do: s.append_entries_timers[v] # returns a timer
+def add_append_entries_timer(s,v), do: Map.put(s, :append_entries_timers, v)
+
+def get_next_index(s, pid), do: Map.get(s.next_index, pid, 1)
+def get_match_index(s, pid), do: Map.get(s.match_index, pid, 0)
+
 def applied(s, v)         do Map.put(s, :applied, MapSet.put(s.applied, v)) end
 
 def init_next_index(s) do    # initialise when server becomes leader

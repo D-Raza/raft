@@ -55,4 +55,16 @@ def cancel_all_append_entries_timers(server) do
   server |> State.append_entries_timers()                        # now reset to Map.new
 end # cancel_all_append_entries_timers
 
+def leader_create_aeTimer(s, followerP) do
+  s = Timer.cancel_append_entries_timer(s, followerP)
+
+  append_entries_timer = Process.send_after(
+    s.selfP,
+    { :APPEND_ENTRIES_TIMEOUT, %{term: s.curr_term, followerP: followerP} },
+    s.config.append_entries_timeout
+  )
+
+  append_entries_timer
+end
+
 end # Timer

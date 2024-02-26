@@ -4,38 +4,98 @@
 
 defmodule ClientRequest do
 
-  def handle_client_request(server, req = %{cmd: _cmd, clientP: clientP, cid: cid}) do
-    Debug.message(server, "+state", "Handle client request from #{inspect(cid)}", 1002)
-    case server.role do
-      :LEADER ->
-        Debug.message(server, "+state", "Client request is handled by the Leader with pid #{inspect(self())} and leaderP is #{inspect(server.leaderP)} clientP: #{inspect(clientP)}", 1002)
-        case determine_request_status(server, cid) do
-          {:NEW_REQUEST, _} ->
-            new_entry = %{term: server.curr_term, request: req}
-              server
-              |> Log.append_entry(new_entry)
-              |> AppendEntries.send_entries_to_all_but_self()
-              |> Monitor.send_msg({ :CLIENT_REQUEST, server.server_num })
+    # s = server process state (c.f. self/this)
 
-          {:COMMITTED, old_entry} ->
-            send old_entry.request.clientP, { :CLIENT_REPLY, %{ cid: old_entry.request.cid, reply: :OK, leaderP: self()}}
-            server
-          {:LOGGED_NOT_COMMITTED, _} -> server
-        end
-      _ ->
-        Debug.message(server, "+state", "Client request is NOT handled by the Leader", 1002)
-        if server.leaderP != nil, do: send(clientP, { :CLIENT_REPLY, %{ reply: :NOT_LEADER, leaderP: server.leaderP, cid: cid}}) # not leader
-        Debug.message(server, "+state", "The leader the client knows is #{inspect(server.leaderP)}, the pid of this follower is #{inspect(self())} clientP: #{inspect(clientP)}", 1002)
-        server
-    end # case server.role
-  end # handle_client_request
+    # Leader process client request, send entries to all followers
+    def receive_request_from_client(leader, m) do
+      # Called when a client sends a :CLIENT_REQUEST to leader.
+      # Inputs:
+      #   - leader              : receipient of the client request
+      #   - m                   : client request
 
-  defp determine_request_status(server, cid) do
-    case Enum.find(server.log, fn {_, entry} -> entry.request.cid == cid end) do
-      nil                                              -> {:NEW_REQUEST, nil}
-      {index, entry} when index < server.commit_index  -> {:COMMITTED, entry}  # LOGS ARE 1-INDEXED
-      {_, entry}                                       -> {:LOGGED_NOT_COMMITTED, entry}
+      # (i) Check if cilent request has been processed by leader
+      status = check_req_status(leader, m.cid)
+
+      # (ii) If client request has already been applied to database, just send :CLIENT_REPLY to client
+      if status == :APPLIED_REQ do
+        send m.clientP, { :CLIENT_REPLY, %{ reply: :NOT_LEADER, leaderP: leader.selfP, cid: m.cid, server_num: leader.server_num}}
+        # IO.puts("received applied request #{inspect m} from client, just reply.")
+        leader
+      end
+
+      # (ii) If client request has not been applied to database or appended to its log
+      leader = if status == :NEW_REQ do
+        leader = Log.append_entry(leader, %{request: m, term: leader.curr_term})    # append client request to leader's log
+        leader = State.commit_index(leader, Log.last_index(leader))                 # update the commit index for in the logs
+        # IO.inspect(leader.log, label: "Received request from client. Leader log")
+        leader
+      else
+        leader
+      end
+
+      # (iii) If client request is a new request, send append entries request to other servers except itself
+      for n <- leader.servers do
+        if n != leader.selfP && status == :NEW_REQ do
+          AppendEntries.send_entries_to_followers(leader, n)
+          leader
+        else
+          leader
+        end # if
+      end # for
+      leader
     end
-  end # determine_request_status
 
-end # ClientRequest
+    def receive_reply_from_db(leader, db_seqnum, client_request) do
+      # Called when a database sends a :CLIENT_REQUEST to leader.
+      # Inputs:
+      #   - leader              : receipient of the database reply
+      #   - db_seqnum           : index of request in database
+      #   - client_request      : client request
+
+      # (i) Update leader's last_applied value
+      leader = leader |> State.last_applied(db_seqnum)
+
+      # (ii) Leader send reply to client that server has applied the request
+      send client_request.clientP, { :CLIENT_REPLY, %{cid: client_request.cid, leaderP: leader.selfP, server_num: leader.server_num, reply: :OK}}
+
+      # (iii) Leader broadcast to followers to commit the request to their local database
+      for followerP <- leader.servers do
+        send followerP, {:COMMIT_ENTRIES_REQUEST, db_seqnum}
+      end
+      leader
+    end
+
+    def check_req_status(leader, cid) do
+      # Check client request status in servers
+      # Inputs:
+      #   - leader              : receipient of the client request
+      #   - cid                 : unique id in client request
+
+      # Requests and cids that have been appended to log but not applied to database
+      committedLog = Map.take(leader.log, Enum.to_list(1..leader.commit_index))
+      committed_cid = for {k,v} <- committedLog, do: v.request.cid
+
+      # Requests and cids that have been applied to database
+      appliedLog = Map.take(leader.log, Enum.to_list(1..leader.last_applied))
+      applied_cid = for {k,v} <- appliedLog, do: v.request.cid
+
+      status = cond do
+        # If leader log is empty, it is a new request, return :NEW_REQ
+        Log.last_index(leader) == 0 ->
+          :NEW_REQ
+
+        # If cid is in applied_cid, it has already been applied to database, return :APPLIED_REQ
+        Enum.find(applied_cid, nil, fn entry -> entry == cid end) != nil ->
+          :APPLIED_REQ
+
+        # If cid is in committed_cid (but not in applied_cid), it has been appended to log, return :COMMITTED_REQ
+        Enum.find(committed_cid, nil, fn entry -> entry == cid end) != nil ->
+          :COMMITTED_REQ
+
+        true ->
+          :NEW_REQ
+        end
+    status # return
+    end
+
+    end # Clientreq

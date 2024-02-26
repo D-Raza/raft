@@ -4,7 +4,7 @@
 # Makefile, v1
 
 SERVERS   = 5      	# 3 or more
-CLIENTS   = 5      	# 1 or more
+CLIENTS   = 5     	# 1 or more
 TIMELIMIT = 15000	# milli-seconds(ms) to quit after
 PARAMS    = default	# e.g. default, slower, faster, etc
 
@@ -51,6 +51,10 @@ run: 	compile
 
 compile:
 	mix compile
+
+x: 
+	$(MAKE) clean 
+	$(MAKE) run
 
 clean:
 	mix clean

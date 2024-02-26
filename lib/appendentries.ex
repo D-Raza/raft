@@ -1,210 +1,182 @@
 
 # distributed algorithms, n.dulay, 14 jan 2024
 # coursework, raft consensus, v2
-
 defmodule AppendEntries do
 
-def handle_ape_request(server, %{leader_term: leader_term, commit_index: commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: leader_entries, leader_pid: leader_pid}) do
-  Debug.message(server, "+state", "#{server.server_num} received ape request", 1002)
-  server = Timer.restart_election_timer(server)
+  # s = server process state (c.f. this/self)
 
-  server = if leader_term > server.curr_term do # If server's term is less than leader's term, step down
-    server
-    |> Vote.stepdown(%{term: leader_term}) # terms are equal
-    |> State.leaderP(leader_pid)
-  else
-    server
-  end
+    def send_entries_to_followers(leader, followerP) do
+    # Called when a leader receives client request or append entries timeout
+    # Inputs:
+    #   - leader              : server who receives client request
+    #   - followerP           : follower's process id
 
+      # (i) If follower's next_index < leader's log length + 1, append new entries
+      if leader.next_index[followerP] < (Log.last_index(leader) + 1) do
 
-  # TODO: BUM? Maybe not?
-  server = if leader_term == server.curr_term do
-    server
-    |> State.leaderP(leader_pid)
-  else
-    server
-  end
+        followerPrevIndex = leader.next_index[followerP] - 1                              # follower's next_index - 1 (where to start the entry)
+        entries = Log.get_entries(leader, (followerPrevIndex+1)..Log.last_index(leader))  # entries
+        prevTerm = Log.term_at(leader, followerPrevIndex)                                 # term which followerPrevIndex is at
 
-  if leader_term < server.curr_term do
-    send leader_pid, {:APPEND_ENTRIES_REPLY, %{ follower_pid: server.selfP, follower_term: server.curr_term, can_append_entries: false, follower_last_index: -1 }} # TODO: BUM?, nil -> -1
-    server
-  else # leader_term == server.curr_term
-    can_append_entries = prev_index == 0 || (prev_index <= Log.last_index(server) && Log.term_at(server, prev_index) == prev_term)
-    {server, index} = if can_append_entries do
-      store_entries(server, prev_index, leader_entries, commit_index)
-    else
-      {server, 0}
+        # send append entries request to follower
+        Timer.restart_append_entries_timer(leader,followerP)
+        # IO.puts("leader #{leader.server_num} sending entries to #{inspect(followerP)}")
+        send followerP, { :APPEND_ENTRIES_REQUEST, leader.curr_term, followerPrevIndex, prevTerm, entries, leader.commit_index}
+        leader
+
+      # (ii) If follower is already up-to-date, leader sends dummy heartbeats to follower
+      else
+        Timer.restart_append_entries_timer(leader,followerP)
+        send followerP, { :APPEND_ENTRIES_REQUEST, leader.curr_term, leader.commit_index }
+        # IO.puts("Followers are up-to-date. Sending heartbeats.")
+        leader
+      end
+      leader
     end
-    send leader_pid, { :APPEND_ENTRIES_REPLY, %{ follower_pid: server.selfP, follower_term: server.curr_term, can_append_entries: can_append_entries, follower_last_index: index }}
-    server
-    |> apply_commits_and_request_db()
 
-  end
-  server
-end # handle_ape_request
+    def receive_append_entries_request(s, leaderTerm, prevIndex, prevTerm, leaderEntries, commitIndex) do
+    # Called when a server receives leader's append entries request
+    # Inputs:
+    #   - s                   : leader who sends append entries request
+    #   - leaderTerm          : leader's current term
+    #   - prevIndex           : follower's next_index - 1
+    #   - prevTerm            : term of follower's prevIndex
+    #   - leaderEntries       : entries to append to follower's log
+    #   - commitIndex         : leader's commit_index
 
-def handle_ape_reply(server, %{ follower_pid: follower_pid, follower_term: follower_term, can_append_entries: can_append_entries, follower_last_index: follower_last_index }) do
-  Debug.message(server, "+state", "Handle ape reply from #{inspect(follower_pid)}", 1002)
-  server |> Debug.assert(follower_term <= server.curr_term, "follower_term <= server.curr_term")
+      # (i) If I am a candidate/ leader but received an append entries request from someone with a larger term, stepdown:
+      s = if s.role != :FOLLOWER && s.curr_term < leaderTerm do
+        # IO.puts("Leader to stepdown as received aeReq from another leader of larger term")
+        s = Vote.stepdown(s, leaderTerm)
+      else
+        s
+      end #if
 
-  # follower_term <= server.curr_term
-  # role == :LEADER
-  server = if follower_term == server.curr_term do
-    server = if can_append_entries do
-      # entries up to follower_last_index are replicated, so update match_index
-      server
-      |> State.next_index(follower_pid, follower_last_index + 1)
-      |> State.match_index(follower_pid, follower_last_index)
-    else
-      State.next_index(server, follower_pid, max(1, server.next_index[follower_pid] - 1))
+      # (ii) If my current term is larger than the leader's, reject leader
+      if s.curr_term > leaderTerm do
+        # IO.puts("Server #{s.server_num} rejecting aeReq from leader bec have a larger term")
+        send s.leaderP, {:APPEND_ENTRIES_REPLY, s.selfP, s.curr_term, false, nil}
+      end # if
+
+      # (iii) If my current term == leader's term
+      # Check if can successfully append: i.e. if our prev index and terms match too
+      success = (s.curr_term == leaderTerm) && (prevIndex == 0 || (prevIndex <= Log.last_index(s) && prevTerm == Log.term_at(s, prevIndex)))
+
+      s =
+        if success do
+          s = storeEntries(s, prevIndex, leaderEntries, commitIndex)
+        else
+          s
+        end # if
+
+      if s.curr_term == leaderTerm do
+        send s.leaderP, {:APPEND_ENTRIES_REPLY, s.selfP, s.curr_term, success, s.commit_index}
+      end
+
+      s
+    end # receive_append_entries_request
+
+
+    def storeEntries(s, prevIndex, entries, commitIndex) do
+    # Called when a server receives leader's append entries request
+    # Inputs:
+    #   - s                   : leader who sends append entries request
+    #   - prevIndex           : follower's next_index - 1
+    #   - entries             : entries to append to follower's log
+    #   - commitIndex         : leader's commit_index
+
+      # IO.inspect(s.log, label: "Server logs before storeEntries")
+
+      # (i) Find the point in the entry to start appending
+      breakPointList = for {index, v} <- entries do
+        if Log.last_index(s) >= index do
+          if s.log[index].term != v.term do
+            index
+          else
+            nil
+          end
+        else
+          index
+        end
+      end
+
+      breakPoint = Enum.min(breakPointList)                 # the index where the server's log and entries start to diverge
+
+      # (ii) Delete extraneous entries
+      entries = if breakPoint != nil do
+        Map.drop(entries, Enum.to_list(0..(breakPoint-1)))  # delete the entries before breakPoint (which have been appended to follower's log)
+      else
+        %{}
+      end
+
+      s = if breakPoint != nil && breakPoint < Log.last_index(s) do
+        s = s|>
+        Log.delete_entries_from(breakPoint)               # delete entries from the point where diverge with leader
+        # IO.inspect(s.log, label: "Server #{s.server_num}'s logs after delete_entries_from")
+        s
+      else
+        s
+      end
+
+      # (iii) Merge logs from breakPoint onwards
+      s = if entries != %{} do
+        s = Log.merge_entries(s, entries)                 # append missing entries
+        s = State.commit_index(s, Log.last_index(s))      # update commit index (for logs)
+        # IO.inspect(s.log, label: "Server #{s.server_num}'s logs after storeEntries")
+        s
+      else
+        # IO.puts("already updated. Server #{s.server_num}'s logs stay the same")
+        s
+      end
+      s
     end
-    if server.next_index[follower_pid] <= Log.last_index(server) do
-      send_entries(server, follower_pid)
-    else
-      server
+
+    def receive_append_entries_reply_from_follower(s, followerP, followerTerm, success, followerLastIndex) do
+    # Called when a leader receives follower's reply for appending entries request
+    # Inputs:
+    #   - s                   : leader who sends append entries request
+    #   - followerP           : follower's process id
+    #   - followerTerm        : follower's current term
+    #   - success             : check append entries consistency
+    #   - followerLastIndex   : follower's log length
+
+    # followerTerm here is definitely <= leader.curr_term
+
+     # Update leader's next_index tracker with follower when consistency check success
+     s = if success do
+        s = State.next_index(s, followerP, followerLastIndex+1)
+        s
+
+    # Decrement follower's next_index when consistency check fails
+     else
+        s = State.next_index(s, followerP, max(s.next_index[followerP]-1, 1))
+        send_entries_to_followers(s, followerP)
+        s
+     end
+
+     # Check if majority of servers have committed request to log
+     counter = for i <- (s.last_applied+1)..Log.last_index(s) // 1,
+      into: Map.new
+      do
+      {i, Enum.reduce(s.servers, 1, fn followerP, count ->
+        if followerP != s.selfP && s.next_index[followerP] > i do
+          count + 1
+        else
+          count
+        end
+      end)}
+     end
+
+     for {index, c} <- counter do
+      # If leader received majority reply from followers, notify the local database to store the request
+      if c >= s.majority do
+        # IO.puts "leader got majority reply, sending request #{index} to database"
+        send s.databaseP, {:DB_REQUEST, Log.request_at(s, index), index}
+      else
+        # IO.puts "do not commit request #{index}"
+      end
+     end
+     s
     end
-    check_for_majority_commits(server)
-  else
-    check_for_majority_commits(server)
-  end
-  server
- end # handle_ape_reply
 
-defp check_for_majority_commits(server) do
-  Debug.assert(server, server.role == :LEADER, "MAJORITY HAS TO BE CHECKED BY LEADER")
-  current_commit_index = server.commit_index
-  uncommitted_entries = Log.get_entries(server, current_commit_index + 1..Log.last_index(server))
-  server = Debug.info(server, "Uncommitted log entries: #{inspect(uncommitted_entries)}", 1002)
-
-  new_commit_index = Enum.reduce_while(uncommitted_entries, current_commit_index + 1, fn _, next_index ->
-    replica_count = calculate_replica_count(server, next_index)
-    if replica_count >= server.majority do
-      {:cont, next_index + 1}
-    else
-      {:halt, next_index}
-    end
-  end) - 1
-
-  server = server
-           |> State.commit_index(new_commit_index)
-           |> apply_commits_and_request_db()
-
-  newly_commited_entries = Log.get_entries(server, current_commit_index + 1..new_commit_index)
-  for {_, entry} <- newly_commited_entries do
-    send entry.request.clientP, { :CLIENT_REPLY, %{ cid: entry.request.cid, leaderP: server.selfP, reply: :OK}}
-  end
-  server
-end
-
-defp calculate_replica_count(server, index) do
-  Enum.reduce(server.servers, 1, fn server_pid, replication_count ->
-    if server.selfP != server_pid and Map.get(server.match_index, server_pid) >= index do
-      replication_count + 1
-    else
-      replication_count
-    end
-  end)
-end
-
-
-defp apply_commits_and_request_db(server) do
-  cond do
-    server.last_applied == server.commit_index ->
-      Debug.message(server, "+state", "#{server.role} AAAAA", 1002)
-      server
-      |> Debug.info("No new commits to apply", 1002)
-    true -> # server.last_applied != server.commit_index
-      # Apply commits
-      Debug.message(server, "+state", "#{server.role} BBBBB", 988)
-      entries_to_apply = Log.get_entries(server, server.last_applied+1..server.commit_index)
-      Enum.each(entries_to_apply, fn {_, entry} ->
-        send server.databaseP, { :DB_REQUEST, entry.request }
-      end)
-      # Update last_applied
-      State.last_applied(server, server.commit_index)
-  end
-end
-
-def handle_ape_timeout_BUM(server, %{term: term, followerP: follower_pid}) do
-  server = case server.role do
-    :LEADER when server.curr_term == term ->
-      server |> send_entries(follower_pid)
-    :CANDIDATE ->
-      IO.puts("AppendEntries timeout, server is a #{server.role}")
-      # server
-      # TODO: BUM?FUCKING BUM
-      server = Timer.restart_append_entries_timer(server, follower_pid)
-      # %{term: term, candidate_pid: candidate_pid, candidate_num: candidate_num, candidate_last_log_term: candidate_last_log_term, candidate_last_log_index: candidate_last_log_index}
-      send follower_pid, { :VOTE_REQUEST, %{term: server.curr_term, candidate_pid: server.selfP, candidate_last_log_term: Log.last_term(server), candidate_last_log_index: Log.last_index(server)}}
-      server
-    :FOLLOWER ->
-      server
-  end
-  server
-end # handle_ape_timeout
-
-def handle_ape_timeout(server, %{term: term, follower_pid: follower_pid}) do
-  # IO.puts("AppendEntries timeout")
-  server = case server.role do
-    :LEADER when server.curr_term == term ->
-      server |> send_entries(follower_pid)
-    _ -> server
-  end
-  server
-end # handle_ape_timeout
-
-def send_entries_to_all_but_self(server) do
-  # Enum.reduce(server.servers, server, fn follower_pid, acc_server ->
-  #   if follower_pid != server.selfP do
-  #     send_entries(acc_server, follower_pid)
-  #   else
-  #     acc_server
-  #   end
-  # end)
-  followers = Enum.filter(server.servers, fn follower_pid -> follower_pid != server.selfP end)
-  Enum.reduce(followers, server, fn follower_pid, acc_server -> send_entries(acc_server, follower_pid) end)
-end # send_entries_to_all_but_self
-
-defp send_entries(server, follower_pid) do
-  # Determines whether to send new entries or a heartbeat based on follower's next index
-  # next_index = server.next_index[follower_pid]
-  # log_last_index = Log.last_index(server)
-  # server =
-  #   case next_index < log_last_index + 1 do
-  #     # true  ->
-  #     true ->
-  #       # Calculate starting point for new entries and the term at the previous index
-  #       follower_prev_index = next_index - 1
-  #       entries = Log.get_entries(server, follower_prev_index + 1..log_last_index)
-  #       prev_term = Log.term_at(server, follower_prev_index)
-
-  #       # Send new entries to follower
-  #       server = Timer.restart_append_entries_timer(server, follower_pid)
-  #       send follower_pid, { :APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: server.commit_index, prev_index: follower_prev_index, prev_term: prev_term, leader_entries: entries, leader_pid: server.selfP}}
-  #       server
-  #     false ->
-  #       # Follower is up to date, send a heartbeat
-  #       server = Timer.restart_append_entries_timer(server, follower_pid) #SHOULD THESE BE ALWAYS 0? CHECK,INSTEAD SET commıt_ındex = commit_index ?
-  #       send follower_pid, {:APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: 0, prev_term: 0, prev_index: 0, leader_entries: %{}, leader_pid: server.selfP}}
-  #       server
-  #   end
-  # server
-  server = Timer.restart_append_entries_timer(server, follower_pid)
-  prev_index = server.next_index[follower_pid] - 1
-  prev_term  = Log.term_at(server, prev_index)
-  last_entry = min(Log.last_index(server), prev_index)
-  entries = Log.get_entries(server, last_entry+1..Log.last_index(server))
-  send follower_pid, { :APPEND_ENTRIES_REQUEST, %{leader_term: server.curr_term, commit_index: server.commit_index, prev_index: prev_index, prev_term: prev_term, leader_entries: entries, leader_pid: server.selfP}}
-  server
-end # send_entries
-
- defp store_entries(server, prev_log_index, entries, commit_index) do
-  server =
-    server
-    |> Log.delete_entries(prev_log_index+1..Log.last_index(server))
-    |> Log.merge_entries(entries)
-    |> State.commit_index(min(commit_index, Log.last_index(server)))
-  {server, Log.last_index(server)}
- end # store_entries
-
-end # AppendEntries
+  end # AppendEntriess

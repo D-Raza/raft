@@ -98,6 +98,7 @@ def receive_reply_from_leader(client, cid) do
         client
         |> Client.result(m.reply)
         |> Client.leaderP(m.leaderP)
+        |> Monitor.send_msg({ :CLIENT_REQUEST, m.server_num })
     end # cond
 
   { :CLIENT_TIMELIMIT } ->

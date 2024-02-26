@@ -26,7 +26,7 @@ end # start
 # _________________________________________________________ Database.next()
 def next(database) do
   receive do
-  { :DB_REQUEST, client_request } ->
+  { :DB_REQUEST, client_request, log_index } when log_index == database.seqnum + 1 ->
     { :MOVE, amount, account1, account2 } = client_request.cmd
 
     database = database |> Database.seqnum(database.seqnum+1)
@@ -38,7 +38,11 @@ def next(database) do
     |> Database.balances(account1, balance1 + amount)
     |> Database.balances(account2, balance2 - amount)
     |> Monitor.send_msg({ :DB_MOVE, database.db_num, database.seqnum, client_request.cmd })
-    |> Database.send_reply_to_server(:OK)
+    |> Database.send_reply_to_server(:OK, database.seqnum, client_request)
+    |> Database.next()
+
+  { :DB_REQUEST, _client_request, _log_index } ->
+    database
     |> Database.next()
 
   unexpected ->
@@ -46,9 +50,9 @@ def next(database) do
   end # receive
 end # next
 
-def send_reply_to_server(database, db_result) do
-  send database.serverP, { :DB_REPLY, db_result }
-  database
+def send_reply_to_server(d, db_result, seqnum,client_request) do
+  send d.serverP, { :DB_REPLY, db_result, seqnum, client_request}
+  d
 end # reply_to_server
 
 end # Database
