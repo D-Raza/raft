@@ -33,10 +33,9 @@ defmodule ClientRequest do
         leader
       end
 
-      # (iii) If client request is a new request, send append entries request to other servers except itself
-      for n <- leader.servers do
-        if n != leader.selfP && status == :NEW_REQ do
-          AppendEntries.send_entries_to_followers(leader, n)
+      for follower_pid <- leader.servers do
+        if follower_pid != leader.selfP && status == :NEW_REQ do
+          AppendEntries.send_apes_to_leader_followers(leader, %{follower_pid: follower_pid})
           leader
         else
           leader

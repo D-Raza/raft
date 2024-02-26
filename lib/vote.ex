@@ -39,7 +39,7 @@ def receive_vote_request_from_candidate(follower, candidate_curr_term, candidate
 
   # (i) Stepdown if candidate term is greater
   follower = if candidate_curr_term > follower.curr_term do
-    follower = stepdown(follower, candidate_curr_term)
+    follower = stepdown(follower, %{term: candidate_curr_term})
     # IO.puts("Server #{follower.server_num} stepdown at receiving vote request")
     follower
   else
@@ -71,22 +71,13 @@ def receive_vote_request_from_candidate(follower, candidate_curr_term, candidate
 end
 
 def receive_vote_reply_from_follower(candidate, follower_num, follower_curr_term) do
-  # Called when a follower voted for candidate and sends a :VOTE_REPLY.
-  # Inputs:
-  #   - candidate          : candidate server
-  #   - follower_num       : follower's server_num
-  #   - follower_curr_term : follower's current term
-
-  # (i) Stepdown if follower's term is larger
   candidate = if candidate.curr_term < follower_curr_term do
-    stepdown(candidate, follower_curr_term)
-    # IO.puts("Candidate #{candidate.server_num} stepdown at vote reply")
+    stepdown(candidate, %{term: follower_curr_term})
     candidate
   else
     candidate
   end
 
-  # (ii) If candidate.curr_term == follower.curr_term, add voter into add_to_voted_by list
   candidate = if candidate.curr_term == follower_curr_term do
     # IO.puts("Processed vote from Server #{follower_num} for Server #{candidate.server_num}")
     candidate |> State.add_to_voted_by(follower_num)
@@ -122,7 +113,8 @@ defp become_leader(candidate) do
     into: Map.new
     do
       if i != candidate.selfP do
-        {i, Timer.leader_create_aeTimer(candidate, i)}
+        server = Timer.cancel_append_entries_timer(candidate, i)
+        {i, Process.send_after(server.selfP,{ :APPEND_ENTRIES_TIMEOUT, %{term: server.curr_term, followerP: i} }, server.config.append_entries_timeout)}
       else
         {i, nil}
       end
@@ -151,24 +143,20 @@ def receive_leader(follower, leaderP, leader_curr_term) do
   end
 
   follower = follower
-    |> stepdown(leader_curr_term)   # Make sure server stepsdown in case if was a past leader/candidate
+    |> stepdown(%{term: leader_curr_term})   # Make sure server stepsdown in case if was a past leader/candidate
     |> State.leaderP(leaderP)       # Update the leaderP in State
 
   follower # return
 end
 
-def stepdown(server, term) do
-  # Used when received message from another server of a larger term.
-
-  server = server
-    |>State.curr_term(term)                     # Update to latest term
-    |>State.role(:FOLLOWER)                     # Change role to Follower
-    |>State.voted_for(nil)                      # Clear any previous votes
-    |>State.new_voted_by()                      # Clear any voted_by  (if any, only for past :LEADERS)
-    |>Timer.cancel_all_append_entries_timers()  # Clear aeTimer       (if any, only for past :LEADERS)
-    |>Timer.restart_election_timer()            # Restart election timer
-
-  server # return
+def stepdown(server, %{term: term}) do
+  server
+  |> State.curr_term(term)
+  |> State.role(:FOLLOWER)
+  |> State.voted_for(nil)
+  |> State.new_voted_by()
+  |> Timer.cancel_all_append_entries_timers()
+  |> Timer.restart_election_timer()
 end
 
 end # Vote
